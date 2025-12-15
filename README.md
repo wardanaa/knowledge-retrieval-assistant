@@ -1,3 +1,9 @@
+---
+title: knowledge-retrieval-assistant
+app_file: app_gradio.py
+sdk: gradio
+sdk_version: 6.1.0
+---
 # Web Q&A Dokumen (TF-IDF)
 
 Aplikasi web sederhana berbasis **Flask** untuk melakukan **pencarian jawaban** dari dokumen **PDF/TXT** menggunakan **TF-IDF + cosine similarity**.
