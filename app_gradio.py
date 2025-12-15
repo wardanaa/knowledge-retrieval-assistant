@@ -31,7 +31,7 @@ MAX_PARAS_PER_CHUNK = 3
 CHUNK_OVERLAP = 1
 HEADER_RATIO = 0.3
 
-LOG_PATH = "qa_log.json"
+LOG_PATH = "knowledge_log.json"
 
 # ============================
 # Fungsi utility & preprocessing
@@ -338,12 +338,14 @@ def answer_question(question, vectorizer, tfidf_matrix, texts, meta, docname):
     if not results:
         return "Tidak ada hasil yang relevan ditemukan."
 
-    # Logging ke file (opsional)
+    # Logging ke file (Knowledge Log)
     try:
+        top = results[0]
         log_item = {
             "time": datetime.now().isoformat(),
             "question": question,
-            "answers": results,
+            "top_answer_snippet": top["raw"][:300],
+            "top_answer_pages": top["pages"],
             "document": docname,
         }
         if os.path.exists(LOG_PATH):
@@ -355,7 +357,7 @@ def answer_question(question, vectorizer, tfidf_matrix, texts, meta, docname):
         with open(LOG_PATH, "w", encoding="utf-8") as f:
             json.dump(lg, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print("Gagal menyimpan log:", e)
+        print("Gagal menyimpan knowledge log:", e)
 
     md = f"### Hasil untuk pertanyaan: `{question}`\n\n"
     if docname:
@@ -369,6 +371,44 @@ def answer_question(question, vectorizer, tfidf_matrix, texts, meta, docname):
 
         md += f"**Rank {i}** — skor: `{r['score']:.4f}` — halaman: {pages}\n\n"
         md += f"> {snippet}\n\n"
+
+    return md
+
+
+def load_knowledge_log():
+    """
+    Membaca riwayat pencarian dari knowledge_log.json dan menampilkannya sebagai Markdown.
+    """
+    if not os.path.exists(LOG_PATH):
+        return "Belum ada Knowledge Log. Coba ajukan pertanyaan dulu."
+
+    try:
+        with open(LOG_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        return f"Gagal membaca Knowledge Log: {e}"
+
+    if not data:
+        return "Belum ada Knowledge Log."
+
+    # ambil 20 entry terakhir
+    last_items = data[-20:]
+
+    md = "### Knowledge Log (Riwayat Pencarian Terakhir)\n\n"
+    for item in reversed(last_items):
+        time_str = item.get("time", "-")
+        q = item.get("question", "-")
+        doc = item.get("document", "-")
+        pages = item.get("top_answer_pages") or []
+        pages_str = ", ".join(str(p) for p in pages) if pages else "-"
+        snippet = item.get("top_answer_snippet", "").strip()
+        if len(snippet) > 120:
+            snippet = snippet[:120] + "..."
+        md += f"- **{time_str}** — Dokumen: `{doc}` — Halaman: {pages_str}\n"
+        md += f"  - Pertanyaan: `{q}`\n"
+        if snippet:
+            md += f"  - Cuplikan jawaban: _{snippet}_\n"
+        md += "\n"
 
     return md
 
@@ -418,6 +458,11 @@ with gr.Blocks(title="Aplikasi Knowledge Retrieval Assistant - Kelompok A") as d
     ask_btn = gr.Button("Cari Jawaban")
     answer_box = gr.Markdown()
 
+    # Knowledge Log section
+    with gr.Accordion("Knowledge Log (Riwayat Pencarian)", open=False):
+        log_btn = gr.Button("Refresh Knowledge Log")
+        log_box = gr.Markdown("Belum ada Knowledge Log.")
+
     # Event: saat file berubah
     file_input.change(
         fn=handle_upload,
@@ -447,7 +492,13 @@ with gr.Blocks(title="Aplikasi Knowledge Retrieval Assistant - Kelompok A") as d
         outputs=answer_box,
     )
 
+    # Event: refresh knowledge log
+    log_btn.click(
+        fn=load_knowledge_log,
+        inputs=None,
+        outputs=log_box,
+    )
+
 
 if __name__ == "__main__":
-    # share=True kalau mau gampang diakses dari device lain saat dev
     demo.launch(share=True, debug=True, pwa=True)
