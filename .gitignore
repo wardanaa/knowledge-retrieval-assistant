@@ -1,0 +1,87 @@
+# =========================
+# Python umum
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtualenv
+venv/
+.venv/
+env/
+.env/
+ENV/
+.conda/
+.python-version
+
+# Build / distribusi
+build/
+dist/
+develop-eggs/
+eggs/
+.eggs/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Cache & tooling
+.cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.ruff_cache/
+.pytype/
+.hypothesis/
+.dmypy.json
+.pyre/
+
+# Jupyter / notebook
+.ipynb_checkpoints/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Sistem OS
+.DS_Store
+Thumbs.db
+
+# =========================
+# Flask / web app
+# =========================
+instance/
+*.sqlite3
+*.db
+
+# =========================
+# Gradio / runtime
+# =========================
+# (biasanya tidak banyak file, tapi kalau kamu bikin folder tmp/ khusus, ignore di sini)
+tmp/
+logs/
+
+# =========================
+# Project ini (TF-IDF Q&A)
+# =========================
+# Output indeks TF-IDF
+index_output/
+
+# Log Q&A
+qa_log.json
+
+# File upload / sementara (kalau kamu pakai folder khusus)
+uploads/
+uploaded_files/
+
+# =========================
+# Environment / secrets
+# =========================
+.env.local
+.env.development
+.env.production
+*.env.backup
