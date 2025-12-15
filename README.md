@@ -4,233 +4,341 @@ app_file: app_gradio.py
 sdk: gradio
 sdk_version: 6.1.0
 ---
-# Web Q&A Dokumen (TF-IDF)
+# Knowledge Retrieval Assistant (TF-IDF Q&A)
 
-Aplikasi web sederhana berbasis **Flask** untuk melakukan **pencarian jawaban** dari dokumen **PDF/TXT** menggunakan **TF-IDF + cosine similarity**.
-Workflow-nya:
-
-1. Upload dokumen (PDF atau TXT)
-2. Sistem preprocessing (bersihkan teks, buang header/footer berulang, pecah paragraf, chunking)
-3. Sistem membangun indeks TF-IDF
-4. Kamu ketik pertanyaan → aplikasi mengambil potongan teks (chunk) yang paling relevan beserta nomor halamannya
+Aplikasi ini adalah **Knowledge Retrieval Assistant** sederhana untuk mendukung **Knowledge Management System (KMS)**.
+Pengguna bisa **upload dokumen pengetahuan (PDF/TXT)** lalu mengajukan pertanyaan. Aplikasi akan mencari potongan teks yang paling relevan menggunakan **TF-IDF + cosine similarity** dan menyimpan riwayat pencarian sebagai **Knowledge Log**.
 
 ---
 
-## Fitur
+## ✨ Fitur Utama
 
-* ✅ Upload dokumen **PDF** atau **TXT**
-* ✅ Normalisasi teks (hapus spasi aneh, baris kosong berlebih, dll.)
-* ✅ Deteksi & penghapusan **header/footer berulang** per halaman
-* ✅ Pemecahan ke **paragraf** dan **chunk** (sliding window dengan overlap)
-* ✅ Pembuatan **indeks TF-IDF** (`sklearn`), disimpan ke folder `index_output/`
-* ✅ Pencarian berbasis **cosine similarity** untuk pertanyaan user
-* ✅ Menampilkan:
+### 🔍 Fitur AI
 
-  * Potongan teks (chunk) paling relevan
-  * Skor similarity
-  * Nomor halaman terkait
-* ✅ Logging Q&A ke file `qa_log.json` (opsional, untuk analisis kemudian)
+* Ekstraksi teks dari **PDF** (via `pdfplumber`) atau **TXT**
+* **Preprocessing teks**:
+
+  * normalisasi spasi & line break
+  * penghapusan header/footer halaman yang berulang
+  * pemecahan paragraf dan chunk (dengan overlap)
+* **Representasi vektor TF-IDF** dengan `scikit-learn`
+* **Pencarian berbasis cosine similarity**:
+
+  * pertanyaan user diubah ke vektor
+  * sistem mengembalikan *top-k* potongan teks (chunk) paling relevan
+  * menampilkan skor similarity dan nomor halaman
+
+### 🏛️ Fitur KMS
+
+Aplikasi ini mengimplementasikan beberapa komponen Knowledge Management:
+
+1. **Knowledge Capture**
+
+   * Upload dokumen (**PDF/TXT**)
+   * Ekstraksi dan preprocessing teks:
+
+     * pemisahan per halaman
+     * deteksi dan penghapusan header/footer berulang
+     * pemecahan paragraf & chunk
+
+2. **Knowledge Storage**
+
+   * Menyimpan hasil analisis ke filesystem:
+
+     * `index_output/vectorizer.pkl` – model TF-IDF
+     * `index_output/tfidf_matrix.npz` – matriks TF-IDF
+     * `index_output/chunk_meta.json` – metadata chunk (teks & nomor halaman)
+   * Menyimpan **Knowledge Log** ke file:
+
+     * `knowledge_log.json` – riwayat pertanyaan & cuplikan jawaban
+
+3. **Knowledge Retrieval**
+
+   * Pencarian pengetahuan berbasis pertanyaan user:
+
+     * mengembalikan chunk teks paling relevan
+     * menampilkan nomor halaman terkait
+
+4. **Knowledge Sharing**
+
+   * Antarmuka web (Flask atau Gradio) yang:
+
+     * menampilkan ringkasan dokumen (jumlah halaman, paragraf, chunk)
+     * menampilkan hasil pencarian untuk pertanyaan pengguna
+     * menampilkan **Knowledge Log (riwayat pencarian)** di UI (mode Gradio)
 
 ---
 
-## Tech Stack
+## 🧠 Model AI yang Digunakan
 
-* **Backend**: [Flask](https://flask.palletsprojects.com/)
-* **Frontend**: HTML + [Bootstrap 5](https://getbootstrap.com/)
+Model AI di aplikasi ini adalah kombinasi:
+
+* **TF-IDF (TfidfVectorizer)** dari `scikit-learn`
+* **Cosine similarity** untuk mengukur kedekatan antara:
+
+  * vektor pertanyaan
+  * vektor chunk dokumen
+
+Ini termasuk dalam kategori:
+
+* **Model local dengan scikit-learn**, dan
+* **Contoh sederhana ML (TF-IDF)** seperti yang dipersyaratkan pada deskripsi tugas.
+
+---
+
+## 🧩 Tech Stack
+
+* **Bahasa**: Python 3.8+
 * **NLP / IR**:
 
-  * `pdfplumber` – ekstraksi teks dari PDF
-  * `scikit-learn` – `TfidfVectorizer`, cosine similarity
-  * `Sastrawi` – stopword & stemming bahasa Indonesia (jika terpasang)
+  * `pdfplumber`
+  * `scikit-learn`
   * `numpy`, `scipy`
+  * `Sastrawi` (opsional, untuk stopword & stemming Bahasa Indonesia)
+* **Web Framework**:
+
+  * **Flask** (Mode 1 – klasik)
+  * **Gradio** (Mode 2 – recommended untuk deploy cepat)
 
 ---
 
-## Struktur Project
+## 📁 Struktur Project
 
-Kurang lebih seperti ini:
+Struktur direktori (kurang lebih):
 
 ```text
 .
-├─ app.py
+├─ app.py                # Mode Flask
+├─ app_gradio.py         # Mode Gradio (disarankan untuk deployment)
 ├─ templates/
-│  └─ index.html
-├─ index_output/           # dibuat otomatis saat build indeks
+│  └─ index.html         # Template Flask
+├─ index_output/         # Dibuat otomatis (indeks TF-IDF)
 │  ├─ vectorizer.pkl
 │  ├─ tfidf_matrix.npz
 │  └─ chunk_meta.json
-├─ qa_log.json             # dibuat otomatis saat ada pertanyaan
-└─ README.md
+├─ knowledge_log.json    # Dibuat otomatis (Knowledge Log)
+├─ README.md
+└─ requirements.txt
 ```
 
-> Catatan: `index_output/` dan `qa_log.json` akan muncul setelah kamu menjalankan aplikasi dan memproses dokumen/bertanya.
+> Catatan:
+>
+> * Folder `index_output/` dan file `knowledge_log.json` akan muncul setelah aplikasi dijalankan dan digunakan.
+> * Di mode Gradio, **Knowledge Log** bisa dilihat langsung dari UI.
 
 ---
 
-## Prasyarat
+## ⚙️ Instalasi
 
-* Python **3.8+** (disarankan 3.9 atau lebih baru)
-* `pip`
-* (Opsional tapi enak) Virtual environment (`venv`, `conda`, dll.)
+1. Clone / salin repo:
 
----
+```bash
+git clone https://github.com/wardanaa/knowledge-retrieval-assistant.git
+cd knowledge-retrieval-assistant
+```
 
-## Instalasi
+2. (Opsional Tapi Direkomendasikan) Buat virtual environment:
 
-1. **Clone / copy** project ini
+```bash
+python -m venv venv
+source venv/bin/activate      # Linux / macOS
+# atau
+venv\Scripts\activate         # Windows
+```
 
-   ```bash
-   git clone <url-repo-ini>
-   cd <nama-folder-repo>
-   ```
+3. Install dependensi:
 
-2. **(Opsional) Buat virtualenv**
+```bash
+pip install -r requirements.txt
+```
 
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # Linux/Mac
-   # atau
-   venv\Scripts\activate     # Windows
-   ```
+Contoh isi `requirements.txt`:
 
-3. **Install dependensi**
-
-   Langsung via `pip`:
-
-   ```bash
-   pip install flask pdfplumber scikit-learn numpy scipy Sastrawi
-   ```
-
-   Atau kalau kamu pakai `requirements.txt`, isi dengan misalnya:
-
-   ```text
-   flask
-   pdfplumber
-   numpy
-   scipy
-   scikit-learn
-   Sastrawi
-   ```
-
-   lalu:
-
-   ```bash
-   pip install -r requirements.txt
-   ```
+```text
+flask
+pdfplumber
+numpy
+scipy
+scikit-learn
+Sastrawi
+gradio
+```
 
 ---
 
-## Cara Menjalankan
+## 🚀 Mode Aplikasi
 
-Jalankan aplikasi Flask:
+Aplikasi bisa dijalankan dalam dua mode:
+
+* **Mode Gradio** – antarmuka modern, mudah di-deploy (disarankan)
+* **Mode Flask** – antarmuka web klasik (HTML + Bootstrap)
+
+### 1️⃣ Mode Gradio (Recommended)
+
+File utama: `app_gradio.py`
+
+Jalankan:
+
+```bash
+python app_gradio.py
+```
+
+Gradio biasanya akan tampil di:
+
+```text
+http://127.0.0.1:7860
+```
+
+#### Alur Penggunaan (Gradio)
+
+1. Buka URL Gradio di browser.
+2. **Upload dokumen (PDF/TXT)** melalui komponen file.
+3. Aplikasi akan:
+
+   * mengekstrak dan memproses teks
+   * membangun indeks TF-IDF
+   * menampilkan:
+
+     * info dokumen (jumlah halaman, paragraf, chunk)
+     * preview teks dokumen
+4. Tuliskan **pertanyaan** pada textbox, lalu klik **“Cari Jawaban”**.
+5. Aplikasi akan menampilkan:
+
+   * beberapa **Rank** jawaban
+   * **skor similarity**
+   * **nomor halaman**
+   * cuplikan teks jawaban
+6. Buka **accordion “Knowledge Log (Riwayat Pencarian)”** untuk melihat:
+
+   * daftar pertanyaan terbaru
+   * timestamp
+   * dokumen terkait
+   * halaman jawaban
+   * cuplikan jawaban (snippet)
+
+> **Knowledge Log (Gradio):**
+>
+> * Disimpan di file `knowledge_log.json`.
+> * Ditampilkan langsung di UI lewat tombol **“Refresh Knowledge Log”**.
+> * Ini adalah implementasi eksplisit dari *Knowledge Storage* + *Knowledge Retrieval* untuk riwayat pengetahuan.
+
+---
+
+### 2️⃣ Mode Flask (Alternatif)
+
+File utama: `app.py`
+
+Jalankan:
 
 ```bash
 python app.py
 ```
 
-Secara default, aplikasi akan berjalan di:
+Secara default Flask berjalan di:
 
 ```text
 http://localhost:5000
 ```
 
-Buka URL itu di browser.
+#### Alur Penggunaan (Flask)
 
-> Catatan: Untuk production, **jangan** pakai `debug=True` dan sebaiknya pakai WSGI server seperti `gunicorn` di belakang Nginx atau sejenisnya.
+1. Buka `http://localhost:5000`.
+2. Di bagian **“Upload dokumen (PDF / TXT)”**:
 
----
+   * pilih file PDF/TXT
+   * klik **“Proses Dokumen”**
+3. Setelah berhasil, halaman akan menampilkan:
 
-## Cara Pakai
+   * nama dokumen
+   * jumlah halaman, paragraf, chunk
+   * preview teks
+4. Di bagian **“Ajukan pertanyaan”**:
 
-1. Buka `http://localhost:5000`
-2. Di bagian **"Upload dokumen (PDF / TXT)"**:
+   * tulis pertanyaan terkait isi dokumen
+   * klik **“Cari Jawaban”**
+5. Aplikasi akan menampilkan daftar hasil dengan:
 
-   * Pilih file `.pdf` atau `.txt`
-   * Klik **"Proses Dokumen"**
-3. Setelah berhasil:
+   * urutan rank
+   * skor similarity
+   * nomor halaman
+   * potongan teks relevan
 
-   * Akan muncul info:
-
-     * Nama dokumen
-     * Jumlah halaman, paragraf, dan chunk
-     * Preview teks dokumen
-4. Di bagian **"Ajukan pertanyaan"**:
-
-   * Ketik pertanyaan terkait isi dokumen
-   * Klik **"Cari Jawaban"**
-5. Di bawahnya akan tampil:
-
-   * Beberapa hasil (chunk) dengan:
-
-     * Rank
-     * Skor similarity
-     * Nomor halaman
-     * Potongan teks relevan
-
-Kalau belum upload dokumen dan kamu coba tanya, aplikasi akan ngasih pesan error “Belum ada dokumen yang di-upload”.
+> Pada mode Flask, Knowledge Log **tetap disimpan** ke `knowledge_log.json`, meskipun belum ditampilkan di UI. File tersebut masih bisa digunakan sebagai bukti komponen **Knowledge Storage** di dokumentasi.
 
 ---
 
-## Konfigurasi Penting (di `app.py`)
+## 🧾 Knowledge Log
 
-Beberapa parameter bisa kamu tweak sesuai kebutuhan:
+**File:** `knowledge_log.json`
 
-```python
-MIN_PARA_LEN = 20             # panjang minimal paragraf (karakter)
-MAX_PARAS_PER_CHUNK = 3       # jumlah paragraf per chunk
-CHUNK_OVERLAP = 1             # overlap antar chunk (dalam paragraf)
-HEADER_RATIO = 0.3            # threshold deteksi header/footer berulang
-LOG_PATH = "qa_log.json"      # lokasi file log
-```
+Setiap kali pengguna mengajukan pertanyaan, aplikasi (mode Gradio & Flask) menyimpan entri log berisi antara lain:
 
-* **MIN_PARA_LEN**
-  Besar → paragraf lebih panjang (lebih sedikit, tapi lebih padat).
-  Kecil → paragraf lebih pendek (lebih banyak, tapi bisa lebih noisy).
+* Waktu (`time`)
+* Pertanyaan (`question`)
+* Nama dokumen (`document`)
+* Halaman jawaban teratas (`top_answer_pages`)
+* Cuplikan jawaban teratas (`top_answer_snippet`)
 
-* **MAX_PARAS_PER_CHUNK & CHUNK_OVERLAP**
-  Mengatur ukuran jendela teks:
+Di mode Gradio:
 
-  * Naikkan `MAX_PARAS_PER_CHUNK` kalau kamu ingin konteks lebih panjang.
-  * Naikkan `CHUNK_OVERLAP` kalau kamu ingin transisi antar chunk lebih halus.
+* Log ini bisa dilihat melalui **accordion “Knowledge Log (Riwayat Pencarian)”**.
+* Secara default menampilkan sekitar 20 entri terbaru.
 
-* **HEADER_RATIO**
-  Dipakai untuk mengenali baris header/footer yang sering muncul di banyak halaman, lalu dibuang.
+Ini bisa dijadikan bahan:
+
+* Analisis penggunaan sistem
+* Sumber pengetahuan tambahan (FAQ internal)
+* Bagian pembahasan **Knowledge Management** di laporan.
 
 ---
 
-## Batasan
+## 📚 Kaitan dengan Knowledge Management System (untuk Laporan)
 
-* Sistem **tidak “mengerti”** arti secara mendalam seperti LLM; ini pure **retrieval TF-IDF**.
-* Jawaban yang muncul berupa **potongan teks** relevan, bukan kalimat baru hasil generasi.
-* Kualitas hasil sangat tergantung:
+Ringkasannya:
 
-  * kualitas dokumen (rapi/tidak)
-  * bahasa yang konsisten (ID/EN)
-  * jumlah noise (scan buruk, banyak simbol, dll.)
-* Untuk dokumen yang **sangat besar**, proses build indeks bisa butuh waktu dan RAM lebih.
+* **AI Component**
+
+  * TF-IDF + cosine similarity (scikit-learn) sebagai model retrieval.
+
+* **Knowledge Capture**
+
+  * Upload dan ekstraksi dokumen pengetahuan (PDF/TXT).
+  * Preprocessing dan chunking sebagai bentuk strukturisasi pengetahuan.
+
+* **Knowledge Storage**
+
+  * Penyimpanan indeks TF-IDF (`index_output/`).
+  * Penyimpanan Knowledge Log (`knowledge_log.json`).
+
+* **Knowledge Retrieval**
+
+  * Pencarian chunk relevan dari dokumen berdasarkan pertanyaan user.
+
+* **Knowledge Sharing**
+
+  * Antarmuka web (Flask/Gradio) yang menyajikan:
+
+    * hasil pencarian
+    * ringkasan dokumen
+    * riwayat pertanyaan (Knowledge Log) ke pengguna.
 
 ---
 
-## Ide Pengembangan Lanjut
+## ⚠️ Batasan
 
-Kalau mau naik level lagi, beberapa opsi:
+* Sistem hanya melakukan **retrieval**, bukan **jawaban generatif**:
 
-* Tambah **evaluasi** berbasis label (misalnya upload CSV pertanyaan–jawaban dan hitung NDCG/MRR).
-* Gabung dengan **LLM** (misalnya lewat API) untuk melakukan **answer generation** dari chunk yang diambil TF-IDF.
-* Tambah opsi:
+  * output berupa potongan teks original dari dokumen.
+* Kualitas hasil sangat dipengaruhi oleh:
 
-  * pilihan jumlah hasil (top-k)
-  * filter per halaman
-  * download log Q&A dalam bentuk CSV.
-* Migrasi UI ke:
-
-  * [Streamlit](https://streamlit.io/)
-  * atau [Gradio](https://www.gradio.app/)
-    biar bisa deploy cepat ke HuggingFace Spaces / Render / dsb.
+  * kualitas dokumen (scan vs teks asli),
+  * konsistensi bahasa (ID/EN),
+  * jumlah noise.
+* Untuk dokumen yang sangat besar, proses indeks bisa memakan waktu & memori lebih besar.
 
 ---
 
-## Lisensi
+## 📝 Lisensi
 
-Silakan gunakan dan modifikasi sesuka hati.
-Kalau mau formal, tambahkan bagian lisensi (MIT/BSD/GPL, dll.) sesuai kebutuhan project-mu.
+Silakan gunakan dan modifikasi sesuai kebutuhan.
+Tambahkan lisensi formal (misalnya MIT) jika diperlukan untuk keperluan publikasi atau open source.
