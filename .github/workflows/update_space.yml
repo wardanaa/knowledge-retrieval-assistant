@@ -26,8 +26,11 @@ jobs:
         python -m pip install --upgrade pip
         python -m pip install --upgrade huggingface_hub
 
-    - name: Log in to Hugging Face (CLI)
-      run: python -m huggingface_hub.cli login --token "${{ secrets.hf_token }}"
+    - name: Write Hugging Face token to file
+      run: |
+        mkdir -p ~/.huggingface
+        echo "${{ secrets.hf_token }}" > ~/.huggingface/token
+        chmod 600 ~/.huggingface/token
 
     - name: Deploy to Spaces
       run: gradio deploy
