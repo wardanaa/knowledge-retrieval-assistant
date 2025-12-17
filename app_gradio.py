@@ -2,52 +2,34 @@ import os
 import re
 import json
 from io import BytesIO
-from collections import Counter
 from datetime import datetime
 
-import numpy as np
 import pdfplumber
-from scipy import sparse
+import gradio as gr
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-import gradio as gr
 
-# Opsional: Sastrawi untuk stopword & stemming bahasa Indonesia
-try:
-    from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFactory
-    from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
+LOG_FILE = "knowledge_log.json"
 
-    stopwords_ind = set(StopWordRemoverFactory().get_stop_words())
-    stemmer = StemmerFactory().create_stemmer()
-except Exception:
-    stopwords_ind = set()
-    stemmer = None
 
 # ============================
-# Konfigurasi dasar
+# FUNGSI EKSTRAKSI FILE
 # ============================
-MIN_PARA_LEN = 20
-MAX_PARAS_PER_CHUNK = 3
-CHUNK_OVERLAP = 1
-HEADER_RATIO = 0.3
-
-LOG_PATH = "knowledge_log.json"
-
-# ============================
-# Fungsi utility & preprocessing
-# ============================
-
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
     """
-    Baca PDF lalu gabungkan semua halaman + marker [PAGE X].
+    Membaca PDF lalu menggabungkan semua halaman,
+    ditambah marker [PAGE X] (kalau mau dipakai nanti).
+    Di sini kita pakai full text yang sudah digabung.
     """
     full_text = []
+
     with pdfplumber.open(BytesIO(file_bytes)) as pdf:
         for i, page in enumerate(pdf.pages, start=1):
             text = page.extract_text() or ""
             text = text.strip()
             full_text.append(f"[PAGE {i}]\n{text}\n")
+
     return "\n".join(full_text)
 
 
@@ -58,216 +40,88 @@ def extract_text_from_txt(file_bytes: bytes) -> str:
         return file_bytes.decode("latin-1", errors="ignore")
 
 
-def normalize_text(raw: str) -> str:
-    if not raw:
+# ============================
+# PREPROCESSING SEDERHANA
+# ============================
+
+def preprocess_text(text: str) -> str:
+    """
+    Preprocessing sederhana untuk dokumen SOP & pertanyaan user.
+    Sesuai kode asli: tanpa stemming / NLP lanjutan.
+    """
+    if not text:
         return ""
-    t = raw.replace("\r\n", "\n").replace("\r", "\n")
-    t = t.replace("\u00a0", " ")
-    t = re.sub(r"[ \t]+", " ", t)
-    t = re.sub(r"\n{3,}", "\n\n", t)
-    return t.strip()
 
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    text = re.sub(r"\s+", " ", text)
 
-def remove_repeated_header_footer(per_page_texts, min_ratio=HEADER_RATIO):
-    if len(per_page_texts) <= 1:
-        return per_page_texts
-
-    top_lines, bottom_lines = [], []
-    for p in per_page_texts:
-        lines = [ln.strip() for ln in p.splitlines() if ln.strip()]
-        if not lines:
-            continue
-        top_lines.extend(lines[:3])
-        bottom_lines.extend(lines[-3:])
-
-    total = max(1, len(per_page_texts))
-    top_rm = {ln for ln, c in Counter(top_lines).items() if c / total >= min_ratio}
-    bottom_rm = {
-        ln for ln, c in Counter(bottom_lines).items() if c / total >= min_ratio
-    }
-
-    cleaned = []
-    for p in per_page_texts:
-        lines = p.splitlines()
-        new_lines = []
-        for i, ln in enumerate(lines):
-            s = ln.strip()
-            if (i < 4 and s in top_rm) or (len(lines) - i <= 4 and s in bottom_rm):
-                continue
-            new_lines.append(ln)
-        cleaned.append("\n".join(new_lines))
-
-    return cleaned
-
-
-def split_into_paragraphs_from_page(page_text, min_len=MIN_PARA_LEN):
-    t = re.sub(r"\n[ \t]*\n+", "\n\n", page_text.strip())
-    paras = [p.strip() for p in re.split(r"\n{2,}", t) if len(p.strip()) >= min_len]
-    if not paras:
-        # fallback: gabung beberapa line jadi paragraf
-        lines = [ln.strip() for ln in page_text.splitlines() if ln.strip()]
-        cur, paras = [], []
-        for ln in lines:
-            cur.append(ln)
-            if len(" ".join(cur)) >= min_len:
-                paras.append(" ".join(cur))
-                cur = []
-        if cur:
-            paras.append(" ".join(cur))
-    return paras
-
-
-def make_chunks(paragraphs, per_chunk=MAX_PARAS_PER_CHUNK, overlap=CHUNK_OVERLAP):
-    """
-    paragraphs: list of (page_no, paragraf_text)
-    """
-    chunks = []
-    i = 0
-    while i < len(paragraphs):
-        window = paragraphs[i : i + per_chunk]
-        chunk_text = "\n".join([p[1] for p in window])
-        pages = sorted(list({p[0] for p in window}))
-        chunks.append(
-            {
-                "chunk_id": len(chunks),
-                "text": chunk_text,
-                "pages": pages,
-            }
-        )
-        i += max(1, per_chunk - overlap)
-    return chunks
-
-
-def preprocess_for_tfidf(text: str) -> str:
-    t = text.lower()
-    t = re.sub(r"[^\w\s]", " ", t)
-    toks = t.split()
-    if stopwords_ind:
-        toks = [w for w in toks if w not in stopwords_ind]
-    if stemmer:
-        toks = [stemmer.stem(w) for w in toks]
-    return " ".join(toks)
-
-
-def preprocess_document(
-    full_text: str,
-    min_para_len: int = MIN_PARA_LEN,
-    max_paras_per_chunk: int = MAX_PARAS_PER_CHUNK,
-    overlap: int = CHUNK_OVERLAP,
-    header_ratio: float = HEADER_RATIO,
-):
-    # Normalisasi
-    norm = normalize_text(full_text)
-
-    # Split halaman berdasarkan marker [PAGE X]
-    pages = re.split(r"\[PAGE\s*\d+\]", norm)
-    pages = [p.strip() for p in pages if p.strip()]
-    if len(pages) <= 1 and norm:
-        # fallback kalau tidak ada marker page
-        pages = [norm[i : i + 1500] for i in range(0, len(norm), 1500)]
-
-    # Hapus header/footer berulang
-    pages = (
-        remove_repeated_header_footer(pages, min_ratio=header_ratio) if pages else []
-    )
-
-    # Split paragraf
-    paragraphs = []
-    for page_no, ptext in enumerate(pages, start=1):
-        paras = split_into_paragraphs_from_page(ptext, min_len=min_para_len)
-        for para in paras:
-            paragraphs.append((page_no, para))
-
-    # Dedup sederhana
-    seen = set()
-    dedup_paragraphs = []
-    for pg, para in paragraphs:
-        key = para.strip().lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        dedup_paragraphs.append((pg, para))
-
-    # Chunking
-    chunks = make_chunks(
-        dedup_paragraphs, per_chunk=max_paras_per_chunk, overlap=overlap
-    )
-
-    # Tambah processed_text
-    for c in chunks:
-        c["processed_text"] = preprocess_for_tfidf(c["text"])
-
-    result = {
-        "pages": len(pages),
-        "paragraphs": len(dedup_paragraphs),
-        "chunks": len(chunks),
-        "processed_chunks": chunks,
-    }
-    return result
-
-
-def build_tfidf_index(processed_chunks, max_features=12000, ngram_range=(1, 2)):
-    texts = [c.get("processed_text", "") for c in processed_chunks]
-    meta = [
-        {"chunk_id": c.get("chunk_id"), "pages": c.get("pages"), "raw": c.get("text")}
-        for c in processed_chunks
-    ]
-    vectorizer = TfidfVectorizer(max_features=max_features, ngram_range=ngram_range)
-    tfidf_matrix = vectorizer.fit_transform(texts)
-
-    # opsional: simpan ke disk
-    os.makedirs("index_output", exist_ok=True)
-    import pickle
-
-    with open("index_output/vectorizer.pkl", "wb") as f:
-        pickle.dump(vectorizer, f)
-    sparse.save_npz("index_output/tfidf_matrix.npz", tfidf_matrix)
-    with open("index_output/chunk_meta.json", "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
-
-    print(
-        f"[build] TF-IDF built: {len(texts)} chunks, matrix shape {tfidf_matrix.shape}"
-    )
-    return vectorizer, tfidf_matrix, texts, meta
-
-
-def query_tfidf(vectorizer, tfidf_matrix, texts, meta, query, top_k=3):
-    q = preprocess_for_tfidf(query)
-    qv = vectorizer.transform([q])
-    sims = cosine_similarity(qv, tfidf_matrix).flatten()
-    idxs = sims.argsort()[::-1][:top_k]
-    results = []
-    for idx in idxs:
-        results.append(
-            {
-                "chunk_idx": int(idx),
-                "chunk_id": int(meta[idx]["chunk_id"]),
-                "score": float(sims[idx]),
-                "pages": meta[idx]["pages"],
-                "raw": meta[idx]["raw"],
-            }
-        )
-    return results
+    return text.strip()
 
 
 # ============================
-# Fungsi untuk Gradio
+# FUNGSI BUILD TF-IDF DARI DOKUMEN
 # ============================
 
+def build_tfidf_from_document(text: str, segment_length: int = 900, min_seg_len: int = 50):
+    """
+    - Preprocess dokumen
+    - Pecah jadi segmen (documents)
+    - Fit TF-IDF
+    - Hitung coverage 'akurasi' seperti di kode Colab
+    """
+    doc_clean = preprocess_text(text)
+
+    # Pecah jadi segmen
+    documents = []
+    for i in range(0, len(doc_clean), segment_length):
+        seg = doc_clean[i : i + segment_length]
+        if len(seg.strip()) > min_seg_len:
+            documents.append(seg)
+
+    if not documents:
+        return None, None, None, "❌ Dokumen terlalu pendek setelah preprocessing, tidak ada segmen yang valid."
+
+    vectorizer = TfidfVectorizer()
+    tfidf_matrix = vectorizer.fit_transform(documents)
+
+    # Hitung "akurasi model (coverage dokumen)" seperti di kode
+    tfidf_features = set(vectorizer.get_feature_names_out())
+    unique_words = set(doc_clean.split())
+    covered_words = tfidf_features.intersection(unique_words)
+
+    if len(unique_words) > 0:
+        accuracy_percent = round((len(covered_words) / len(unique_words)) * 100, 2)
+    else:
+        accuracy_percent = 0.0
+
+    stats_md = (
+        f"- Jumlah segmen SOP: **{len(documents)}**\n"
+        f"- Jumlah kata unik dokumen SOP: **{len(unique_words)}**\n"
+        f"- Jumlah fitur TF-IDF: **{len(tfidf_features)}**\n"
+        f"- Jumlah kata terwakili TF-IDF: **{len(covered_words)}**\n"
+        f"- Akurasi Model (Coverage Dokumen): **{accuracy_percent}%**\n"
+    )
+
+    return vectorizer, tfidf_matrix, documents, stats_md
+
+
+# ============================
+# HANDLER UNTUK UPLOAD DI GRADIO
+# ============================
 
 def handle_upload(file_path):
     """
-    Dipanggil saat user upload file di Gradio.
-    Mengembalikan:
-    - info dokumen (Markdown)
-    - preview teks
-    - vectorizer, matrix, texts, meta, nama dokumen (disimpan di gr.State)
+    Dipanggil saat user upload file:
+    - baca file
+    - ekstrak teks (PDF/TXT)
+    - build TF-IDF
+    - kembalikan info dokumen + preview + state (vectorizer, matrix, documents)
     """
     if not file_path:
         return (
             "❌ Belum ada file yang di-upload.",
             "",
-            None,
             None,
             None,
             None,
@@ -280,131 +134,191 @@ def handle_upload(file_path):
         file_bytes = f.read()
 
     if filename.lower().endswith(".pdf"):
-        text = extract_text_from_pdf(file_bytes)
+        raw_text = extract_text_from_pdf(file_bytes)
     else:
-        text = extract_text_from_txt(file_bytes)
+        raw_text = extract_text_from_txt(file_bytes)
 
-    if not text.strip():
+    if not raw_text.strip():
         return (
-            "❌ File kosong atau tidak bisa diekstrak teksnya.",
+            "❌ File kosong atau teks tidak bisa diekstrak.",
             "",
-            None,
             None,
             None,
             None,
             filename,
         )
 
-    processed = preprocess_document(text)
-    vectorizer, tfidf_matrix, texts, meta = build_tfidf_index(
-        processed["processed_chunks"]
-    )
+    vectorizer, tfidf_matrix, documents, stats_md = build_tfidf_from_document(raw_text)
 
-    stats_line = (
-        f"- Halaman: **{processed['pages']}**\n"
-        f"- Paragraf unik: **{processed['paragraphs']}**\n"
-        f"- Chunk: **{processed['chunks']}**"
-    )
+    if vectorizer is None:
+        # gagal bikin segmen
+        return (
+            stats_md,
+            raw_text[:2000],
+            None,
+            None,
+            None,
+            filename,
+        )
 
-    info_md = f"""### Dokumen terproses
+    info_md = f"""### Dokumen ter-proses
 
-**Nama file**: `{filename}`  
+**Nama file**: `{filename}`
 
-{stats_line}
+{stats_md}
 """
 
-    preview = text[:2000]
+    preview = raw_text[:2000]
 
     return (
         info_md,
         preview,
         vectorizer,
         tfidf_matrix,
-        texts,
-        meta,
+        documents,
         filename,
     )
 
 
-def answer_question(question, vectorizer, tfidf_matrix, texts, meta, docname):
+# ============================
+# FUNGSI JAWAB PERTANYAAN
+# ============================
+
+def answer_question(
+    question: str,
+    vectorizer: TfidfVectorizer,
+    tfidf_matrix,
+    documents,
+    filename: str,
+    threshold: float = 0.05,
+):
+    """
+    Tiruan logika original:
+    - preprocess pertanyaan
+    - transform dengan vectorizer (tanpa fit)
+    - cosine similarity
+    - ambil segmen terbaik (+ konteks sebelum/sesudah)
+    - simpan Knowledge Log
+    """
     question = (question or "").strip()
     if not question:
         return "⚠️ Pertanyaan tidak boleh kosong."
 
-    if vectorizer is None or tfidf_matrix is None or texts is None or meta is None:
-        return "⚠️ Belum ada dokumen yang di-upload. Upload dulu PDF/TXT-nya."
+    if vectorizer is None or tfidf_matrix is None or documents is None:
+        return "⚠️ Belum ada dokumen yang di-upload atau indeks belum dibuat."
 
-    results = query_tfidf(vectorizer, tfidf_matrix, texts, meta, question, top_k=5)
-    if not results:
-        return "Tidak ada hasil yang relevan ditemukan."
+    # Preprocess pertanyaan
+    question_clean = preprocess_text(question)
 
-    # Logging ke file (Knowledge Log)
-    try:
-        top = results[0]
-        log_item = {
-            "time": datetime.now().isoformat(),
-            "question": question,
-            "top_answer_snippet": top["raw"][:300],
-            "top_answer_pages": top["pages"],
-            "document": docname,
-        }
-        if os.path.exists(LOG_PATH):
-            with open(LOG_PATH, "r", encoding="utf-8") as f:
-                lg = json.load(f)
-        else:
-            lg = []
-        lg.append(log_item)
-        with open(LOG_PATH, "w", encoding="utf-8") as f:
-            json.dump(lg, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print("Gagal menyimpan knowledge log:", e)
+    # Transform query
+    query_vector = vectorizer.transform([question_clean])
 
-    md = f"### Hasil untuk pertanyaan: `{question}`\n\n"
-    if docname:
-        md += f"**Dokumen**: `{docname}`\n\n"
+    # Cosine similarity
+    similarity_scores = cosine_similarity(query_vector, tfidf_matrix)[0]
+    best_index = int(similarity_scores.argmax())
+    best_score = float(similarity_scores[best_index])
 
-    for i, r in enumerate(results, start=1):
-        pages = ", ".join(str(p) for p in r["pages"])
-        snippet = r["raw"].strip()
-        if len(snippet) > 800:
-            snippet = snippet[:800] + "..."
+    # Ambil konteks segmen sebelum & sesudah
+    if best_score >= threshold:
+        start = max(best_index - 1, 0)
+        end = min(best_index + 2, len(documents))
+        answer = "\n\n".join(documents[start:end])
+    else:
+        answer = "Maaf, SOP yang relevan tidak ditemukan."
 
-        md += f"**Rank {i}** — skor: `{r['score']:.4f}` — halaman: {pages}\n\n"
-        md += f"> {snippet}\n\n"
+    # Simpan ke Knowledge Log
+    save_knowledge_log(
+        question=question,
+        answer=answer,
+        similarity_score=round(best_score * 100, 2),
+        source_segment_index=best_index,
+        document=filename,
+    )
+
+    # Kembalikan dalam bentuk Markdown
+    md = f"### Pertanyaan\n`{question}`\n\n"
+    md += f"**Skor Relevansi**: `{round(best_score * 100, 2)}%`\n\n"
+    md += "### Jawaban Chatbot\n\n"
+    md += f"{answer}\n\n"
+    md += f"_Log pencarian disimpan di `{LOG_FILE}`._"
 
     return md
 
 
+# ============================
+# KNOWLEDGE LOG
+# ============================
+
+def save_knowledge_log(
+    question: str,
+    answer: str,
+    similarity_score: float,
+    source_segment_index: int,
+    document: str,
+):
+    """
+    Simpan log ke knowledge_log.json
+    """
+    # pastikan file ada
+    if not os.path.exists(LOG_FILE):
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            json.dump([], f, indent=4, ensure_ascii=False)
+
+    try:
+        with open(LOG_FILE, "r", encoding="utf-8") as f:
+            logs = json.load(f)
+    except Exception:
+        logs = []
+
+    log_id = len(logs) + 1
+    log_entry = {
+        "log_id": log_id,
+        "timestamp": datetime.now().isoformat(),
+        "document": document,
+        "question": question,
+        "answer": answer,
+        "similarity_score": similarity_score,
+        "source_segment_index": int(source_segment_index),
+    }
+
+    logs.append(log_entry)
+
+    with open(LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(logs, f, indent=4, ensure_ascii=False)
+
+
 def load_knowledge_log():
     """
-    Membaca riwayat pencarian dari knowledge_log.json dan menampilkannya sebagai Markdown.
+    Baca dan tampilkan Knowledge Log sebagai Markdown ringkas
     """
-    if not os.path.exists(LOG_PATH):
+    if not os.path.exists(LOG_FILE):
         return "Belum ada Knowledge Log. Coba ajukan pertanyaan dulu."
 
     try:
-        with open(LOG_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        with open(LOG_FILE, "r", encoding="utf-8") as f:
+            logs = json.load(f)
     except Exception as e:
         return f"Gagal membaca Knowledge Log: {e}"
 
-    if not data:
+    if not logs:
         return "Belum ada Knowledge Log."
 
-    # ambil 20 entry terakhir
-    last_items = data[-20:]
-
+    last_logs = logs[-20:]  # ambil 20 terakhir
     md = "### Knowledge Log (Riwayat Pencarian Terakhir)\n\n"
-    for item in reversed(last_items):
-        time_str = item.get("time", "-")
-        q = item.get("question", "-")
-        doc = item.get("document", "-")
-        pages = item.get("top_answer_pages") or []
-        pages_str = ", ".join(str(p) for p in pages) if pages else "-"
-        snippet = item.get("top_answer_snippet", "").strip()
-        if len(snippet) > 120:
-            snippet = snippet[:120] + "..."
-        md += f"- **{time_str}** — Dokumen: `{doc}` — Halaman: {pages_str}\n"
+
+    for log in reversed(last_logs):
+        log_id = log.get("log_id", "-")
+        ts = log.get("timestamp", "-")
+        doc = log.get("document", "-")
+        q = log.get("question", "-")
+        score = log.get("similarity_score", "-")
+        seg_idx = log.get("source_segment_index", "-")
+
+        snippet = (log.get("answer", "") or "").strip()
+        if len(snippet) > 200:
+            snippet = snippet[:200] + "..."
+
+        md += f"- **Log ID {log_id}** — `{ts}` — Dokumen: `{doc}` — Skor: {score}% — Segmen: {seg_idx}\n"
         md += f"  - Pertanyaan: `{q}`\n"
         if snippet:
             md += f"  - Cuplikan jawaban: _{snippet}_\n"
@@ -414,36 +328,36 @@ def load_knowledge_log():
 
 
 # ============================
-# Definisi UI Gradio
+# DEFINISI UI GRADIO
 # ============================
 
-with gr.Blocks(title="Aplikasi Knowledge Retrieval Assistant - Kelompok A") as demo:
+with gr.Blocks(title="SOP Q&A TF-IDF – Gradio") as demo:
     gr.Markdown(
         """
-    # Aplikasi Knowledge Retrieval Assistant – Kelompok A
+    # SOP Q&A berbasis TF-IDF
 
-    Upload dokumen **PDF / TXT**, lalu ajukan pertanyaan.  
-    Sistem akan mencari potongan teks paling relevan menggunakan **TF-IDF + cosine similarity**.
+    Upload dokumen SOP (**PDF / TXT**), lalu ajukan pertanyaan.  
+    Sistem akan memecah dokumen menjadi beberapa segmen, membangun model **TF-IDF**, dan mencari segmen paling relevan menggunakan **cosine similarity**.  
+    Setiap pencarian akan disimpan sebagai **Knowledge Log**.
     """
     )
 
-    # State untuk menyimpan indeks & metadata
+    # State untuk model & dokumen
     state_vectorizer = gr.State()
     state_matrix = gr.State()
-    state_texts = gr.State()
-    state_meta = gr.State()
-    state_docname = gr.State()
+    state_documents = gr.State()
+    state_filename = gr.State()
 
     with gr.Row():
         file_input = gr.File(
-            label="Upload dokumen (PDF / TXT)",
+            label="Upload dokumen SOP (PDF / TXT)",
             file_types=[".pdf", ".txt"],
             type="filepath",
         )
         doc_info = gr.Markdown("Belum ada dokumen yang di-upload.")
 
     preview_box = gr.Textbox(
-        label="Preview teks dokumen",
+        label="Preview teks dokumen (potongan awal)",
         lines=12,
         interactive=False,
     )
@@ -451,19 +365,18 @@ with gr.Blocks(title="Aplikasi Knowledge Retrieval Assistant - Kelompok A") as d
     gr.Markdown("---")
 
     question_box = gr.Textbox(
-        label="Pertanyaan",
-        placeholder="Tulis pertanyaan terkait isi dokumen di sini...",
+        label="Pertanyaan SOP",
+        placeholder="Tulis pertanyaan terkait SOP di sini...",
         lines=2,
     )
     ask_btn = gr.Button("Cari Jawaban")
     answer_box = gr.Markdown()
 
-    # Knowledge Log section
     with gr.Accordion("Knowledge Log (Riwayat Pencarian)", open=False):
         log_btn = gr.Button("Refresh Knowledge Log")
         log_box = gr.Markdown("Belum ada Knowledge Log.")
 
-    # Event: saat file berubah
+    # Event: upload file
     file_input.change(
         fn=handle_upload,
         inputs=file_input,
@@ -472,27 +385,25 @@ with gr.Blocks(title="Aplikasi Knowledge Retrieval Assistant - Kelompok A") as d
             preview_box,
             state_vectorizer,
             state_matrix,
-            state_texts,
-            state_meta,
-            state_docname,
+            state_documents,
+            state_filename,
         ],
     )
 
-    # Event: saat klik tombol "Cari Jawaban"
+    # Event: klik "Cari Jawaban"
     ask_btn.click(
         fn=answer_question,
         inputs=[
             question_box,
             state_vectorizer,
             state_matrix,
-            state_texts,
-            state_meta,
-            state_docname,
+            state_documents,
+            state_filename,
         ],
         outputs=answer_box,
     )
 
-    # Event: refresh knowledge log
+    # Event: refresh log
     log_btn.click(
         fn=load_knowledge_log,
         inputs=None,
@@ -501,4 +412,4 @@ with gr.Blocks(title="Aplikasi Knowledge Retrieval Assistant - Kelompok A") as d
 
 
 if __name__ == "__main__":
-    demo.launch(share=True, debug=True, pwa=True)
+    demo.launch()
