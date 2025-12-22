@@ -228,6 +228,18 @@ http://127.0.0.1:7860
 
 File utama: `app.py`
 
+Sebelum menjalankan Flask, set `FLASK_SECRET_KEY` di environment agar sesi aman:
+
+macOS / Linux:
+```bash
+export FLASK_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+```
+
+Windows (PowerShell):
+```powershell
+$env:FLASK_SECRET_KEY = (python -c "import secrets; print(secrets.token_hex(32))")
+```
+
 Jalankan:
 
 ```bash
