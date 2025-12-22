@@ -31,7 +31,7 @@ MAX_PARAS_PER_CHUNK = 3
 CHUNK_OVERLAP = 1
 HEADER_RATIO = 0.3
 
-LOG_PATH = "qa_log.json"
+LOG_PATH = "knowledge_log.json"
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
