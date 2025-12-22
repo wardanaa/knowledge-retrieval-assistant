@@ -1,10 +1,11 @@
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash, session
 from io import BytesIO
 import os
 import re
 import json
 from collections import Counter
 from datetime import datetime
+import uuid
 
 import numpy as np
 import pdfplumber
@@ -33,18 +34,37 @@ HEADER_RATIO = 0.3
 LOG_PATH = "qa_log.json"
 
 app = Flask(__name__)
-app.secret_key = "ubah_ini_jadi_random_secret"
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
 
-# State sederhana di memory
-STATE = {
-    "document_name": None,
-    "preview": None,
-    "stats": None,
-    "vectorizer": None,
-    "tfidf_matrix": None,
-    "texts": None,
-    "meta": None,
-}
+# State sederhana per-session di memory
+STATE_BY_SESSION = {}
+
+
+def _get_session_id():
+    sid = session.get("sid")
+    if not sid:
+        sid = uuid.uuid4().hex
+        session["sid"] = sid
+    return sid
+
+
+def _get_state():
+    sid = _get_session_id()
+    if sid not in STATE_BY_SESSION:
+        STATE_BY_SESSION[sid] = {
+            "document_name": None,
+            "preview": None,
+            "stats": None,
+            "vectorizer": None,
+            "tfidf_matrix": None,
+            "texts": None,
+            "meta": None,
+        }
+    return STATE_BY_SESSION[sid]
 
 # ============================
 # Fungsi dari skrip lama (disederhanakan)
@@ -261,6 +281,7 @@ def query_tfidf(vectorizer, tfidf_matrix, texts, meta, query, top_k=3):
 
 @app.route("/", methods=["GET", "POST"])
 def index():
+    state = _get_state()
     answers = []
     question = ""
 
@@ -283,17 +304,17 @@ def index():
             processed = preprocess_document(text)
             vectorizer, tfidf_matrix, texts, meta = build_tfidf_index(processed["processed_chunks"])
 
-            STATE["document_name"] = filename
-            STATE["preview"] = text[:1000]
-            STATE["stats"] = {
+            state["document_name"] = filename
+            state["preview"] = text[:1000]
+            state["stats"] = {
                 "pages": processed["pages"],
                 "paragraphs": processed["paragraphs"],
                 "chunks": processed["chunks"],
             }
-            STATE["vectorizer"] = vectorizer
-            STATE["tfidf_matrix"] = tfidf_matrix
-            STATE["texts"] = texts
-            STATE["meta"] = meta
+            state["vectorizer"] = vectorizer
+            state["tfidf_matrix"] = tfidf_matrix
+            state["texts"] = texts
+            state["meta"] = meta
 
             flash("Dokumen berhasil diproses. Sekarang kamu bisa mengajukan pertanyaan.", "success")
             return redirect(url_for("index"))
@@ -303,14 +324,14 @@ def index():
             question = request.form.get("question", "").strip()
             if not question:
                 flash("Pertanyaannya kosong.", "error")
-            elif STATE["vectorizer"] is None:
+            elif state["vectorizer"] is None:
                 flash("Belum ada dokumen yang di-upload. Silakan upload dulu.", "error")
             else:
                 raw_results = query_tfidf(
-                    STATE["vectorizer"],
-                    STATE["tfidf_matrix"],
-                    STATE["texts"],
-                    STATE["meta"],
+                    state["vectorizer"],
+                    state["tfidf_matrix"],
+                    state["texts"],
+                    state["meta"],
                     question,
                     top_k=5,
                 )
@@ -330,7 +351,7 @@ def index():
                         "time": datetime.now().isoformat(),
                         "question": question,
                         "answers": raw_results,
-                        "document": STATE["document_name"],
+                        "document": state["document_name"],
                     }
                     if os.path.exists(LOG_PATH):
                         with open(LOG_PATH, "r", encoding="utf-8") as f:
@@ -345,7 +366,7 @@ def index():
 
     return render_template(
         "index.html",
-        state=STATE,
+        state=state,
         answers=answers,
         question=question,
     )
@@ -353,5 +374,5 @@ def index():
 
 if __name__ == "__main__":
     # Jangan pakai debug=True di production
-    app.run(host="0.0.0.0", port=5000, debug=True)
-
+    debug_mode = os.environ.get("FLASK_DEBUG") == "1"
+    app.run(host="0.0.0.0", port=5000, debug=debug_mode)
