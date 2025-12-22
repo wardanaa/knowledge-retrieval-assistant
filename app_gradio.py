@@ -16,21 +16,18 @@ LOG_FILE = "knowledge_log.json"
 # FUNGSI EKSTRAKSI FILE
 # ============================
 
-def extract_text_from_pdf(file_bytes: bytes) -> str:
+def extract_text_from_pdf(file_bytes: bytes):
     """
-    Membaca PDF lalu menggabungkan semua halaman,
-    ditambah marker [PAGE X] (kalau mau dipakai nanti).
-    Di sini kita pakai full text yang sudah digabung.
+    Membaca PDF lalu mengembalikan list teks per halaman.
     """
-    full_text = []
+    pages = []
 
     with pdfplumber.open(BytesIO(file_bytes)) as pdf:
-        for i, page in enumerate(pdf.pages, start=1):
+        for page in pdf.pages:
             text = page.extract_text() or ""
-            text = text.strip()
-            full_text.append(f"[PAGE {i}]\n{text}\n")
+            pages.append(text.strip())
 
-    return "\n".join(full_text)
+    return pages
 
 
 def extract_text_from_txt(file_bytes: bytes) -> str:
@@ -63,29 +60,36 @@ def preprocess_text(text: str) -> str:
 # FUNGSI BUILD TF-IDF DARI DOKUMEN
 # ============================
 
-def build_tfidf_from_document(text: str, segment_length: int = 900, min_seg_len: int = 50):
+def build_tfidf_from_pages(pages, segment_length: int = 900, min_seg_len: int = 50):
     """
-    - Preprocess dokumen
-    - Pecah jadi segmen (documents)
-    - Fit TF-IDF
-    - Hitung coverage 'akurasi' seperti di kode Colab
+    - Pecah dokumen per halaman jadi segmen
+    - Simpan raw text + page metadata
+    - Simpan processed text untuk TF-IDF
     """
-    doc_clean = preprocess_text(text)
-
-    # Pecah jadi segmen
     documents = []
-    for i in range(0, len(doc_clean), segment_length):
-        seg = doc_clean[i : i + segment_length]
-        if len(seg.strip()) > min_seg_len:
-            documents.append(seg)
+    for page_no, page_text in enumerate(pages, start=1):
+        raw_page = (page_text or "").strip()
+        if not raw_page:
+            continue
+        for i in range(0, len(raw_page), segment_length):
+            raw_seg = raw_page[i : i + segment_length]
+            processed = preprocess_text(raw_seg)
+            if len(processed.strip()) > min_seg_len:
+                documents.append(
+                    {
+                        "raw": raw_seg,
+                        "processed": processed,
+                        "pages": [page_no],
+                    }
+                )
 
     if not documents:
         return None, None, None, "❌ Dokumen terlalu pendek setelah preprocessing, tidak ada segmen yang valid."
 
     vectorizer = TfidfVectorizer()
-    tfidf_matrix = vectorizer.fit_transform(documents)
+    tfidf_matrix = vectorizer.fit_transform([d["processed"] for d in documents])
 
-    # Hitung "akurasi model (coverage dokumen)" seperti di kode
+    doc_clean = " ".join(d["processed"] for d in documents)
     tfidf_features = set(vectorizer.get_feature_names_out())
     unique_words = set(doc_clean.split())
     covered_words = tfidf_features.intersection(unique_words)
@@ -96,6 +100,7 @@ def build_tfidf_from_document(text: str, segment_length: int = 900, min_seg_len:
         accuracy_percent = 0.0
 
     stats_md = (
+        f"- Jumlah halaman dokumen: **{len(pages)}**\n"
         f"- Jumlah segmen SOP: **{len(documents)}**\n"
         f"- Jumlah kata unik dokumen SOP: **{len(unique_words)}**\n"
         f"- Jumlah fitur TF-IDF: **{len(tfidf_features)}**\n"
@@ -134,9 +139,11 @@ def handle_upload(file_path):
         file_bytes = f.read()
 
     if filename.lower().endswith(".pdf"):
-        raw_text = extract_text_from_pdf(file_bytes)
+        pages = extract_text_from_pdf(file_bytes)
+        raw_text = "\n\n".join(pages)
     else:
         raw_text = extract_text_from_txt(file_bytes)
+        pages = [raw_text]
 
     if not raw_text.strip():
         return (
@@ -148,7 +155,7 @@ def handle_upload(file_path):
             filename,
         )
 
-    vectorizer, tfidf_matrix, documents, stats_md = build_tfidf_from_document(raw_text)
+    vectorizer, tfidf_matrix, documents, stats_md = build_tfidf_from_pages(pages)
 
     if vectorizer is None:
         # gagal bikin segmen
@@ -222,8 +229,11 @@ def answer_question(
     if best_score >= threshold:
         start = max(best_index - 1, 0)
         end = min(best_index + 2, len(documents))
-        answer = "\n\n".join(documents[start:end])
+        answer_segments = documents[start:end]
+        answer_pages = sorted({p for seg in answer_segments for p in seg.get("pages", [])})
+        answer = "\n\n".join(seg.get("raw", "") for seg in answer_segments).strip()
     else:
+        answer_pages = []
         answer = "Maaf, SOP yang relevan tidak ditemukan."
 
     # Simpan ke Knowledge Log
@@ -239,6 +249,8 @@ def answer_question(
     md = f"### Pertanyaan\n`{question}`\n\n"
     md += f"**Skor Relevansi**: `{round(best_score * 100, 2)}%`\n\n"
     md += "### Jawaban Chatbot\n\n"
+    if answer_pages:
+        md += f"**Halaman terkait**: `{', '.join(str(p) for p in answer_pages)}`\n\n"
     md += f"{answer}\n\n"
     md += f"_Log pencarian disimpan di `{LOG_FILE}`._"
 
